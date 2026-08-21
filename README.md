@@ -50,7 +50,7 @@ Set as Portainer stack environment variables (never committed here):
 | `RCLONE_PATH` | no (default blank - syncs directly into the folder above) | subfolder path relative to `RCLONE_ROOT_FOLDER_ID`, only needed for further nesting |
 | `HA_URL` | no | e.g. `http://<your-home-assistant-host>:8123`, enables the notification |
 | `HA_TOKEN` | no | Home Assistant long-lived access token |
-| `HA_NOTIFY_SERVICE` | no (default `persistent_notification/create`) | any HA service path, e.g. `notify/mobile_app_<yourname>` |
+| `HA_NOTIFY_SERVICE` | no (default `persistent_notification/create`) | any HA service path, e.g. `notify/mobile_app_dave` |
 
 ## Ofelia job
 
