@@ -1,6 +1,6 @@
-# Same base pattern as another-similar-project: a real Selenium/Chromium image
-# so browser + matching chromedriver are already correct, rather than
-# hand-rolling a chromium install on a generic slim base.
+# A real Selenium/Chromium image, so browser + matching chromedriver are
+# already correct, rather than hand-rolling a chromium install on a generic
+# slim base.
 FROM selenium/standalone-chromium:latest
 
 USER root
