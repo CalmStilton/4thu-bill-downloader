@@ -8,7 +8,7 @@ services:
       ISP_USERNAME: ${ISP_USERNAME}
       ISP_PASSWORD: ${ISP_PASSWORD}
       RCLONE_REMOTE: ${RCLONE_REMOTE:-gdrive}
-      RCLONE_PATH: ${RCLONE_PATH:-4th Utility Bills}
+      RCLONE_PATH: ${RCLONE_PATH:-}
       HA_URL: ${HA_URL:-}
       HA_TOKEN: ${HA_TOKEN:-}
       HA_NOTIFY_SERVICE: ${HA_NOTIFY_SERVICE:-persistent_notification/create}
