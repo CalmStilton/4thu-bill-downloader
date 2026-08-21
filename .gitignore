@@ -1,0 +1,4 @@
+data/
+logs/
+rclone.conf
+.env
