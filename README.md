@@ -34,7 +34,7 @@ Set as Portainer stack environment variables (never committed here):
 | `ISP_USERNAME` | yes | 4th Utility account email |
 | `ISP_PASSWORD` | yes | 4th Utility account password |
 | `RCLONE_REMOTE` | no (default `gdrive`) | name of the remote in `rclone.conf` |
-| `RCLONE_PATH` | no (default `4th Utility Bills`) | destination folder on the remote |
+| `RCLONE_PATH` | no (default blank - syncs to the remote's configured root) | destination folder on the remote, relative to `root_folder_id` if set in `rclone.conf` |
 | `HA_URL` | no | e.g. `http://<your-home-assistant-host>:8123`, enables the notification |
 | `HA_TOKEN` | no | Home Assistant long-lived access token |
 | `HA_NOTIFY_SERVICE` | no (default `persistent_notification/create`) | any HA service path, e.g. `notify/mobile_app_<yourname>` |
@@ -48,14 +48,14 @@ container, e.g. in `config.ini`:
 [job-run "4thu-bill-check"]
 schedule = @weekly
 image = 4thu-bill-downloader:latest
-network = 4thu-bill-downloader_default
-volume = /root/4thu-bill-downloader/data:/app/data
-volume = /root/4thu-bill-downloader/logs:/app/logs
-volume = /root/4thu-bill-downloader/rclone.conf:/root/.config/rclone/rclone.conf:ro
+volume = /data/compose/<stack-id>/data:/app/data
+volume = /data/compose/<stack-id>/logs:/app/logs
+volume = /data/compose/<stack-id>/rclone.conf:/root/.config/rclone/rclone.conf:ro
 ```
 
-(Exact volume paths depend on where the stack ends up on the host - adjust
-to match.) Billing is monthly (around the 11th), checking weekly just means
+(`<stack-id>` is whatever numeric ID Portainer assigned this stack - check the stack's URL, or its files under `/data/compose/` on the host. No `network =` line is needed here: a `job-run` container runs standalone and doesn't need to share a network namespace with anything.)
+
+Billing is monthly (around the 11th), checking weekly just means
 most weeks are a no-op.
 
 ## Local layout
