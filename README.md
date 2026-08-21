@@ -25,6 +25,18 @@ rather than kept resident.
   or `rclone authorize "drive"` if doing it headless and pasting the token
   back in) - this can't be automated from inside the container.
 
+  Use the **full `drive` scope** (not `drive.file`) when setting up the
+  remote, so it can see and write into folders that already exist in your
+  Drive rather than only ones it created itself.
+
+  The destination folder is pinned by Google Drive folder ID rather than by
+  path, via the `RCLONE_ROOT_FOLDER_ID` stack env var below (see
+  [Environment variables](#environment-variables)) - so the folder can be
+  freely renamed or moved in Drive afterwards without breaking anything, as
+  long as the ID itself stays the same. To get a folder's ID: open it in the
+  Drive web UI and copy the string after `/folders/` in the URL, e.g.
+  `https://drive.google.com/drive/folders/<this-part>`.
+
 ## Environment variables
 
 Set as Portainer stack environment variables (never committed here):
@@ -34,7 +46,8 @@ Set as Portainer stack environment variables (never committed here):
 | `ISP_USERNAME` | yes | 4th Utility account email |
 | `ISP_PASSWORD` | yes | 4th Utility account password |
 | `RCLONE_REMOTE` | no (default `gdrive`) | name of the remote in `rclone.conf` |
-| `RCLONE_PATH` | no (default blank - syncs to the remote's configured root) | destination folder on the remote, relative to `root_folder_id` if set in `rclone.conf` |
+| `RCLONE_ROOT_FOLDER_ID` | no (default blank - remote falls back to `root_folder_id` in `rclone.conf`, or the real Drive root if neither is set) | Google Drive folder ID to sync into - see [Requirements on the host](#requirements-on-the-host) above |
+| `RCLONE_PATH` | no (default blank - syncs directly into the folder above) | subfolder path relative to `RCLONE_ROOT_FOLDER_ID`, only needed for further nesting |
 | `HA_URL` | no | e.g. `http://<your-home-assistant-host>:8123`, enables the notification |
 | `HA_TOKEN` | no | Home Assistant long-lived access token |
 | `HA_NOTIFY_SERVICE` | no (default `persistent_notification/create`) | any HA service path, e.g. `notify/mobile_app_<yourname>` |
