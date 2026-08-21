@@ -1,0 +1,250 @@
+#!/usr/bin/env python3
+"""
+4thU Bill Downloader
+---------------------
+Logs into my.4thutility.co.uk, walks the /bills table, downloads any invoice
+PDF that hasn't already been saved locally, pushes new bills to Google Drive
+via rclone, and (optionally) fires a Home Assistant notification when a new
+bill is found. Always logs a line so a run's outcome is visible later, even
+when nothing new was found.
+
+Designed to run as a one-shot container triggered by Ofelia (job-run), not
+as a long-lived service.
+"""
+
+import os
+import re
+import sys
+import time
+import subprocess
+from datetime import datetime
+
+import requests
+from selenium import webdriver
+from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.common.by import By
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
+
+LOGIN_URL = "https://my.4thutility.co.uk/login"
+BILLS_URL = "https://my.4thutility.co.uk/bills"
+
+DATA_DIR = os.environ.get("DATA_DIR", "/app/data")
+LOG_DIR = os.environ.get("LOG_DIR", "/app/logs")
+LOG_FILE = os.path.join(LOG_DIR, "download_bills.log")
+
+ISP_USERNAME = os.environ.get("ISP_USERNAME")
+ISP_PASSWORD = os.environ.get("ISP_PASSWORD")
+
+RCLONE_REMOTE = os.environ.get("RCLONE_REMOTE", "").strip()       # e.g. "gdrive"
+RCLONE_PATH = os.environ.get("RCLONE_PATH", "4th Utility Bills")  # folder on the remote
+
+HA_URL = os.environ.get("HA_URL", "").strip()                     # e.g. "http://<your-home-assistant-host>:8123"
+HA_TOKEN = os.environ.get("HA_TOKEN", "").strip()                 # long-lived access token
+HA_NOTIFY_SERVICE = os.environ.get("HA_NOTIFY_SERVICE", "persistent_notification/create")
+
+ORDINAL_RE = re.compile(r"(\d+)(st|nd|rd|th)", re.IGNORECASE)
+
+
+def log(message):
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    line = f"[{timestamp}] {message}"
+    print(line, flush=True)
+    os.makedirs(LOG_DIR, exist_ok=True)
+    with open(LOG_FILE, "a") as f:
+        f.write(line + "\n")
+
+
+def build_driver():
+    options = Options()
+    options.add_argument("--headless=new")
+    options.add_argument("--no-sandbox")
+    options.add_argument("--disable-dev-shm-usage")
+    options.add_argument("--disable-gpu")
+    options.add_argument("--window-size=1400,1200")
+    options.add_argument(
+        "--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36"
+    )
+    return webdriver.Chrome(options=options)
+
+
+def login(driver):
+    driver.get(LOGIN_URL)
+    wait = WebDriverWait(driver, 20)
+
+    email_input = wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, "input[type='email'], input[type='text']")))
+    password_input = driver.find_element(By.CSS_SELECTOR, "input[type='password']")
+
+    email_input.clear()
+    email_input.send_keys(ISP_USERNAME)
+    password_input.clear()
+    password_input.send_keys(ISP_PASSWORD)
+
+    submit_btn = driver.find_element(By.XPATH, "//button[contains(., 'Submit')]")
+    submit_btn.click()
+
+    try:
+        wait.until(lambda d: "/login" not in d.current_url)
+    except Exception as exc:
+        raise RuntimeError(
+            "Login did not redirect away from /login - credentials may be wrong "
+            "or the login page structure has changed."
+        ) from exc
+
+
+def parse_bill_date(text):
+    """'11th August 2026' -> datetime(2026, 8, 11)"""
+    cleaned = ORDINAL_RE.sub(r"\1", text).strip()
+    return datetime.strptime(cleaned, "%d %B %Y")
+
+
+def hook_window_open(driver):
+    driver.execute_script(
+        "window.__opens = []; "
+        "window.open = function(...args) { window.__opens.push(args); return null; };"
+    )
+
+
+def last_opened_url(driver):
+    opens = driver.execute_script("return window.__opens")
+    driver.execute_script("window.__opens = [];")
+    if not opens:
+        return None
+    return opens[-1][0]
+
+
+def collect_invoice_rows(driver):
+    """Return list of (reference, bill_date, row_element) for Invoice rows."""
+    wait = WebDriverWait(driver, 20)
+    wait.until(EC.presence_of_element_located((By.XPATH, "//td[contains(text(), 'Invoice #')]")))
+
+    rows = driver.find_elements(By.XPATH, "//tr[td[contains(text(), 'Invoice #')]]")
+    invoices = []
+    for row in rows:
+        cells = row.find_elements(By.TAG_NAME, "td")
+        if len(cells) < 4:
+            continue
+        date_text = cells[0].text.strip()
+        ref_text = cells[3].text.strip()  # Reference column, e.g. INV1402505
+        if not ref_text.startswith("INV"):
+            continue
+        try:
+            bill_date = parse_bill_date(date_text)
+        except ValueError:
+            log(f"WARNING: could not parse date '{date_text}' for {ref_text}, skipping")
+            continue
+        invoices.append((ref_text, bill_date, row))
+    return invoices
+
+
+def session_from_driver(driver):
+    session = requests.Session()
+    for cookie in driver.get_cookies():
+        session.cookies.set(cookie["name"], cookie["value"], domain=cookie.get("domain", "my.4thutility.co.uk"))
+    session.headers.update({"User-Agent": "Mozilla/5.0"})
+    return session
+
+
+def download_invoice(driver, session, row, dest_path):
+    hook_window_open(driver)
+    driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", row)
+    driver.execute_script("arguments[0].click();", row)
+
+    url = None
+    for _ in range(10):
+        url = last_opened_url(driver)
+        if url:
+            break
+        time.sleep(0.3)
+
+    if not url:
+        raise RuntimeError("Clicking the invoice row did not produce a download URL")
+
+    resp = session.get(url, timeout=30)
+    resp.raise_for_status()
+    content_type = resp.headers.get("content-type", "")
+    if "pdf" not in content_type.lower():
+        raise RuntimeError(f"Expected a PDF but got content-type '{content_type}'")
+
+    with open(dest_path, "wb") as f:
+        f.write(resp.content)
+
+
+def sync_to_drive():
+    if not RCLONE_REMOTE:
+        log("RCLONE_REMOTE not set, skipping Google Drive sync")
+        return
+    result = subprocess.run(
+        ["rclone", "copy", DATA_DIR, f"{RCLONE_REMOTE}:{RCLONE_PATH}"],
+        capture_output=True, text=True,
+    )
+    if result.returncode != 0:
+        log(f"WARNING: rclone sync to Drive failed: {result.stderr.strip()}")
+    else:
+        log("Synced data folder to Google Drive")
+
+
+def notify_home_assistant(new_bills):
+    if not (HA_URL and HA_TOKEN):
+        return
+    filenames = ", ".join(b["filename"] for b in new_bills)
+    payload = {
+        "title": "New 4th Utility bill",
+        "message": f"Downloaded: {filenames}",
+    }
+    try:
+        resp = requests.post(
+            f"{HA_URL.rstrip('/')}/api/services/{HA_NOTIFY_SERVICE}",
+            headers={"Authorization": f"Bearer {HA_TOKEN}", "Content-Type": "application/json"},
+            json=payload,
+            timeout=15,
+        )
+        resp.raise_for_status()
+    except Exception as exc:
+        log(f"WARNING: Home Assistant notification failed: {exc}")
+
+
+def main():
+    if not (ISP_USERNAME and ISP_PASSWORD):
+        log("ERROR: ISP_USERNAME / ISP_PASSWORD not set, aborting")
+        sys.exit(1)
+
+    os.makedirs(DATA_DIR, exist_ok=True)
+    os.makedirs(LOG_DIR, exist_ok=True)
+
+    driver = build_driver()
+    new_bills = []
+    try:
+        login(driver)
+        driver.get(BILLS_URL)
+        invoices = collect_invoice_rows(driver)
+        session = session_from_driver(driver)
+
+        for reference, bill_date, row in invoices:
+            filename = f"{bill_date.year:04d}-{bill_date.month:02d}-4thUBill.pdf"
+            dest_path = os.path.join(DATA_DIR, filename)
+            if os.path.exists(dest_path):
+                continue
+            try:
+                download_invoice(driver, session, row, dest_path)
+                log(f"Downloaded new bill: {filename} ({reference})")
+                new_bills.append({"filename": filename, "reference": reference})
+            except Exception as exc:
+                log(f"ERROR: failed to download {reference} ({filename}): {exc}")
+
+        if new_bills:
+            sync_to_drive()
+            notify_home_assistant(new_bills)
+        else:
+            log("Checked, nothing new.")
+
+    except Exception as exc:
+        log(f"ERROR: run failed: {exc}")
+        sys.exit(1)
+    finally:
+        driver.quit()
+
+
+if __name__ == "__main__":
+    main()
