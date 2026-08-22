@@ -22,6 +22,15 @@ services:
       HA_URL: ${HA_URL:-}
       HA_TOKEN: ${HA_TOKEN:-}
       HA_NOTIFY_SERVICE: ${HA_NOTIFY_SERVICE:-persistent_notification/create}
+      HA_NOTIFY_ON_SUCCESS: ${HA_NOTIFY_ON_SUCCESS:-true}
+      HA_NOTIFY_ON_ERROR: ${HA_NOTIFY_ON_ERROR:-true}
+      # BookStack run-history page (your-wiki-host, "4th Utility" book) - see
+      # README's "Wiki run history" section for the one-time service-account
+      # setup these credentials belong to.
+      BOOKSTACK_URL: ${BOOKSTACK_URL:-}
+      BOOKSTACK_TOKEN_ID: ${BOOKSTACK_TOKEN_ID:-}
+      BOOKSTACK_TOKEN_SECRET: ${BOOKSTACK_TOKEN_SECRET:-}
+      BOOKSTACK_PAGE_ID: ${BOOKSTACK_PAGE_ID:-80}
     volumes:
       - ./data:/app/data
       - ./logs:/app/logs
