@@ -43,6 +43,22 @@ HA_URL = os.environ.get("HA_URL", "").strip()                     # e.g. "http:/
 HA_TOKEN = os.environ.get("HA_TOKEN", "").strip()                 # long-lived access token
 HA_NOTIFY_SERVICE = os.environ.get("HA_NOTIFY_SERVICE", "persistent_notification/create")
 
+
+def _bool_env(name, default=True):
+    val = os.environ.get(name)
+    if val is None or val.strip() == "":
+        return default
+    return val.strip().lower() in ("1", "true", "yes", "on")
+
+
+HA_NOTIFY_ON_SUCCESS = _bool_env("HA_NOTIFY_ON_SUCCESS", True)
+HA_NOTIFY_ON_ERROR = _bool_env("HA_NOTIFY_ON_ERROR", True)
+
+BOOKSTACK_URL = os.environ.get("BOOKSTACK_URL", "").strip()
+BOOKSTACK_TOKEN_ID = os.environ.get("BOOKSTACK_TOKEN_ID", "").strip()
+BOOKSTACK_TOKEN_SECRET = os.environ.get("BOOKSTACK_TOKEN_SECRET", "").strip()
+BOOKSTACK_PAGE_ID = os.environ.get("BOOKSTACK_PAGE_ID", "").strip()
+
 ORDINAL_RE = re.compile(r"(\d+)(st|nd|rd|th)", re.IGNORECASE)
 
 
@@ -107,7 +123,7 @@ def hook_window_open(driver):
 
 
 def last_opened_url(driver):
-    opens = driver.execute_script("return window.__opens")
+    opens = driver.execute_script("return window.__opens";)
     driver.execute_script("window.__opens = [];")
     if not opens:
         return None
@@ -193,6 +209,20 @@ def notify_home_assistant(new_bills):
         "title": "New 4th Utility bill",
         "message": f"Downloaded: {filenames}",
     }
+    _post_to_ha(payload)
+
+
+def notify_home_assistant_error(error):
+    if not (HA_URL and HA_TOKEN):
+        return
+    payload = {
+        "title": "4th Utility bill check failed",
+        "message": str(error)[:200],
+    }
+    _post_to_ha(payload)
+
+
+def _post_to_ha(payload):
     try:
         resp = requests.post(
             f"{HA_URL.rstrip('/')}/api/services/{HA_NOTIFY_SERVICE}",
@@ -205,6 +235,75 @@ def notify_home_assistant(new_bills):
         log(f"WARNING: Home Assistant notification failed: {exc}")
 
 
+def drive_folder_link():
+    """Link to the pinned Drive destination folder, if we're syncing to one."""
+    folder_id = os.environ.get("RCLONE_CONFIG_GDRIVE_ROOT_FOLDER_ID", "").strip()
+    if not folder_id:
+        return None
+    return f"https://drive.google.com/drive/folders/{folder_id}"
+
+
+def build_history_line(new_bills, error):
+    date_str = datetime.now().strftime("%Y-%m-%d")
+    if error:
+        status = "Error"
+        detail = str(error).replace("|", "/")[:150]
+    elif new_bills:
+        status = "New bill downloaded"
+        names = ", ".join(f"`{b['filename']}`" for b in new_bills)
+        link = drive_folder_link()
+        detail = f"[Drive folder]({link}) — {names}" if link else names
+    else:
+        status = "Checked, nothing new"
+        detail = "-"
+    return f"| {date_str} | {status} | {detail} |"
+
+
+def update_bookstack_log(status_line):
+    """Prepend a row to the Run history table on the wiki page. Reads the
+    current page, inserts the new row under the table header, and writes the
+    whole page back - BookStack's API has no partial-content update, so this
+    keeps everything else on the page untouched by round-tripping the full
+    markdown."""
+    if not (BOOKSTACK_URL and BOOKSTACK_TOKEN_ID and BOOKSTACK_TOKEN_SECRET and BOOKSTACK_PAGE_ID):
+        return
+
+    base = BOOKSTACK_URL.rstrip("/")
+    headers = {
+        "Authorization": f"Token {BOOKSTACK_TOKEN_ID}:{BOOKSTACK_TOKEN_SECRET}",
+        "Content-Type": "application/json",
+    }
+    try:
+        resp = requests.get(f"{base}/api/pages/{BOOKSTACK_PAGE_ID}", headers=headers, timeout=15)
+        resp.raise_for_status()
+        content = resp.json().get("markdown", "")
+
+        lines = content.splitlines()
+        header_idx = next(
+            (i for i, line in enumerate(lines)
+             if line.strip().startswith("|") and "Date" in line and "Status" in line),
+            None,
+        )
+        if header_idx is None:
+            log("WARNING: BookStack update skipped - run history table header not found on page")
+            return
+
+        insert_idx = header_idx + 2  # past the header row and its "|---|---|---|" separator
+        new_lines = lines[:insert_idx] + [status_line]
+        rest = [l for l in lines[insert_idx:] if "no runs logged yet" not in l]
+        new_content = "\n".join(new_lines + rest)
+
+        put_resp = requests.put(
+            f"{base}/api/pages/{BOOKSTACK_PAGE_ID}",
+            headers=headers,
+            json={"markdown": new_content},
+            timeout=15,
+        )
+        put_resp.raise_for_status()
+    except Exception as exc:
+        log(f"WARNING: BookStack page update failed: {exc}")
+
+
 def main():
     if not (ISP_USERNAME and ISP_PASSWORD):
         log("ERROR: ISP_USERNAME / ISP_PASSWORD not set, aborting")
@@ -215,6 +314,7 @@ def main():
 
     driver = build_driver()
     new_bills = []
+    error = None
     try:
         login(driver)
         driver.get(BILLS_URL)
@@ -235,15 +335,23 @@ def main():
 
         if new_bills:
             sync_to_drive()
-            notify_home_assistant(new_bills)
+            if HA_NOTIFY_ON_SUCCESS:
+                notify_home_assistant(new_bills)
         else:
             log("Checked, nothing new.")
 
     except Exception as exc:
+        error = exc
         log(f"ERROR: run failed: {exc}")
-        sys.exit(1)
     finally:
         driver.quit()
+
+    update_bookstack_log(build_history_line(new_bills, error))
+
+    if error:
+        if HA_NOTIFY_ON_ERROR:
+            notify_home_assistant_error(error)
+        sys.exit(1)
 
 
 if __name__ == "__main__":
