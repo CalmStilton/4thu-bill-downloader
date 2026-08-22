@@ -10,12 +10,15 @@ services:
       RCLONE_REMOTE: ${RCLONE_REMOTE:-gdrive}
       RCLONE_PATH: ${RCLONE_PATH:-}
       # Overrides root_folder_id for the "gdrive" remote in rclone.conf, so the
-      # destination folder ID lives here as a stack env var instead of being
-      # buried in a host file. rclone's env override naming is
-      # RCLONE_CONFIG_<REMOTE>_<KEY> (remote name uppercased) - if RCLONE_REMOTE
-      # above is ever changed away from "gdrive", this variable name must be
-      # updated to match, e.g. RCLONE_CONFIG_MYREMOTE_ROOT_FOLDER_ID.
-      RCLONE_CONFIG_GDRIVE_ROOT_FOLDER_ID: ${RCLONE_ROOT_FOLDER_ID:-}
+      # Drive destination folder ID lives here as a named stack env var instead
+      # of being buried in a host file. This is Google Drive-specific (the
+      # underlying rclone override syntax is RCLONE_CONFIG_<REMOTE>_<KEY>,
+      # remote name uppercased) - if RCLONE_REMOTE above is ever changed away
+      # from "gdrive", this line's key must be updated to match, e.g.
+      # RCLONE_CONFIG_MYREMOTE_ROOT_FOLDER_ID. Any other rclone destination
+      # (SFTP, S3, a NAS, etc.) is configured directly in rclone.conf on the
+      # host instead - see README's "Adding another rclone destination".
+      RCLONE_CONFIG_GDRIVE_ROOT_FOLDER_ID: ${RCLONE_GDRIVE_ROOT_FOLDER_ID:-}
       HA_URL: ${HA_URL:-}
       HA_TOKEN: ${HA_TOKEN:-}
       HA_NOTIFY_SERVICE: ${HA_NOTIFY_SERVICE:-persistent_notification/create}
