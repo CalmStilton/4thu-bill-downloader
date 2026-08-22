@@ -123,7 +123,7 @@ def hook_window_open(driver):
 
 
 def last_opened_url(driver):
-    opens = driver.execute_script("return window.__opens";)
+    opens = driver.execute_script("return window.__opens")
     driver.execute_script("window.__opens = [];")
     if not opens:
         return None
@@ -250,7 +250,7 @@ def build_history_line(new_bills, error):
         detail = str(error).replace("|", "/")[:150]
     elif new_bills:
         status = "New bill downloaded"
-        names = ", ".join(f"`{b['filename']}`" for b in new_bills)
+        names = ", ".join(f"{b['filename']}`" for b in new_bills)
         link = drive_folder_link()
         detail = f"[Drive folder]({link}) — {names}" if link else names
     else:
@@ -312,10 +312,11 @@ def main():
     os.makedirs(DATA_DIR, exist_ok=True)
     os.makedirs(LOG_DIR, exist_ok=True)
 
-    driver = build_driver()
+    driver = None
     new_bills = []
     error = None
     try:
+        driver = build_driver()
         login(driver)
         driver.get(BILLS_URL)
         invoices = collect_invoice_rows(driver)
@@ -344,7 +345,8 @@ def main():
         error = exc
         log(f"ERROR: run failed: {exc}")
     finally:
-        driver.quit()
+        if driver is not None:
+            driver.quit()
 
     update_bookstack_log(build_history_line(new_bills, error))
 
