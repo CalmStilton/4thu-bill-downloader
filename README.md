@@ -55,6 +55,12 @@ Set as Portainer stack environment variables (never committed here):
 | `HA_URL` | no | e.g. `http://<your-home-assistant-host>:8123`, enables the notification |
 | `HA_TOKEN` | no | Home Assistant long-lived access token |
 | `HA_NOTIFY_SERVICE` | no (default `persistent_notification/create`) | any HA service path, e.g. `notify/mobile_app_<yourname>` |
+| `HA_NOTIFY_ON_SUCCESS` | no (default `true`) | send an HA notification when a new bill is found |
+| `HA_NOTIFY_ON_ERROR` | no (default `true`) | send an HA notification when a run fails |
+| `BOOKSTACK_URL` | no | BookStack base URL, e.g. `http://<your-bookstack-host>:6875` - enables the wiki run-history update |
+| `BOOKSTACK_TOKEN_ID` | no | API Token ID for the BookStack service account (see [Wiki run history](#wiki-run-history)) |
+| `BOOKSTACK_TOKEN_SECRET` | no | API Token Secret for the same account |
+| `BOOKSTACK_PAGE_ID` | no (default `80`) | ID of the "Bill Download Log" page under the "4th Utility" book |
 
 ## Ofelia job
 
@@ -101,6 +107,36 @@ outside of any of this:
    was already changing size, but for a personal setup shared with one
    other person, one more line in a config file is simpler than another
    layer of env var plumbing.
+
+## Wiki run history
+
+Every run - success, no-op, or failure - appends a row to the "Run history"
+table on the [Bill Download Log](https://your-wiki-host/books/4th-utility/page/bill-download-log)
+page in the wiki, so there's an all-time record in one place without relying
+on container logs alone. The script talks to BookStack's REST API directly
+using its own credentials (`BOOKSTACK_TOKEN_ID` / `BOOKSTACK_TOKEN_SECRET`) -
+nothing in that path goes through Claude at runtime.
+
+This needs a dedicated BookStack service-account user, set up once by hand
+(there's no API for creating users):
+
+1. In BookStack, go to **Settings → Users → Invite/Add a user**. Give it a
+   name like `4thu-bill-downloader`, a throwaway email/password (it'll only
+   ever authenticate via API token), and the **Editor** role.
+2. Restrict it to just the "4th Utility" book: on that book's page, use
+   **Permissions** to set custom permissions for this user (view/create/edit
+   on that book only) rather than leaving it with wiki-wide Editor access.
+3. Log in as that user (or use an admin's "Manage Users" impersonate option),
+   go to **Edit Profile → API Tokens → Create Token**, and copy the **Token
+   ID** and **Token Secret** it shows you - the secret is only ever shown
+   once.
+4. Set those two values plus `BOOKSTACK_URL` as this stack's env vars. The
+   "Bill Download Log" page (`BOOKSTACK_PAGE_ID`) already exists under the
+   "4th Utility" book, so the default of `80` should just work.
+
+If any of the three `BOOKSTACK_*` variables are left blank, the script skips
+the wiki update entirely (same pattern as the optional HA notification) -
+nothing else about the run is affected.
 
 ## Local layout
 
