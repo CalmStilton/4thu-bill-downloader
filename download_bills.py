@@ -269,6 +269,8 @@ def update_bookstack_log(status_line):
         return
 
     base = BOOKSTACK_URL.rstrip("/")
+    if not base.startswith(("http://", "https://")):
+        base = f"https://{base}"
     headers = {
         "Authorization": f"Token {BOOKSTACK_TOKEN_ID}:{BOOKSTACK_TOKEN_SECRET}",
         "Content-Type": "application/json",
