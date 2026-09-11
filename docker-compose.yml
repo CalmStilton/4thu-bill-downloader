@@ -1,7 +1,6 @@
 services:
   4thu-bill-downloader:
-    build: .
-    image: 4thu-bill-downloader:latest
+    image: ghcr.io/calmstilton/4thu-bill-downloader:latest
     container_name: 4thu-bill-downloader
     restart: "no"          # ephemeral: Ofelia's job-run starts it on schedule and it exits
     environment:
