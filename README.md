@@ -15,9 +15,8 @@ rather than kept resident.
 ## Requirements on the host
 
 - **Ofelia** must already be running as its own standalone Portainer stack
-  (split out from the media-stack's `media-automation` stack) with `docker.sock`
-  mounted, so it can trigger this container's `job-run` on a schedule. This
-  repo does not deploy Ofelia itself.
+  with `docker.sock` mounted, so it can trigger this container's `job-run`
+  on a schedule. This repo does not deploy Ofelia itself.
 - **rclone**, configured for Google Drive once, with the resulting
   `rclone.conf` placed next to `docker-compose.yml` on the host (bind-mounted
   read-only into the container - never committed to this repo). Generating
@@ -60,7 +59,7 @@ Set as Portainer stack environment variables (never committed here):
 | `BOOKSTACK_URL` | no | BookStack base URL, e.g. `http://<your-bookstack-host>:6875` - enables the wiki run-history update |
 | `BOOKSTACK_TOKEN_ID` | no | API Token ID for the BookStack service account (see [Wiki run history](#wiki-run-history)) |
 | `BOOKSTACK_TOKEN_SECRET` | no | API Token Secret for the same account |
-| `BOOKSTACK_PAGE_ID` | no (default `80`) | ID of the "Bill Download Log" page under the "4th Utility" book |
+| `BOOKSTACK_PAGE_ID` | no | ID of the wiki page to append run history to (see [Wiki run history](#wiki-run-history)) |
 
 ## Ofelia job
 
@@ -111,11 +110,10 @@ outside of any of this:
 ## Wiki run history
 
 Every run - success, no-op, or failure - appends a row to the "Run history"
-table on the [Bill Download Log](https://your-wiki-host/books/4th-utility/page/bill-download-log)
-page in the wiki, so there's an all-time record in one place without relying
-on container logs alone. The script talks to BookStack's REST API directly
-using its own credentials (`BOOKSTACK_TOKEN_ID` / `BOOKSTACK_TOKEN_SECRET`) -
-nothing in that path goes through Claude at runtime.
+table on the configured `BOOKSTACK_PAGE_ID` page in your wiki, so there's an
+all-time record in one place without relying on container logs alone. The
+script talks to BookStack's REST API directly using its own credentials
+(`BOOKSTACK_TOKEN_ID` / `BOOKSTACK_TOKEN_SECRET`).
 
 This needs a dedicated BookStack service-account user, set up once by hand
 (there's no API for creating users):
@@ -130,9 +128,12 @@ This needs a dedicated BookStack service-account user, set up once by hand
    go to **Edit Profile → API Tokens → Create Token**, and copy the **Token
    ID** and **Token Secret** it shows you - the secret is only ever shown
    once.
-4. Set those two values plus `BOOKSTACK_URL` as this stack's env vars. The
-   "Bill Download Log" page (`BOOKSTACK_PAGE_ID`) already exists under the
-   "4th Utility" book, so the default of `80` should just work.
+4. Create a page (e.g. "Bill Download Log") under that book. Get its
+   numeric ID from the page's **Permalink** option (shown as
+   `.../link/<id>`) or via `GET /api/pages` on the BookStack API - the
+   normal page URL is slug-based and won't show it. Set `BOOKSTACK_PAGE_ID`
+   to that value along with `BOOKSTACK_URL` and the token pair as this
+   stack's env vars.
 
 If any of the three `BOOKSTACK_*` variables are left blank, the script skips
 the wiki update entirely (same pattern as the optional HA notification) -
