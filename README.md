@@ -145,3 +145,21 @@ nothing else about the run is affected.
 data/    downloaded bill PDFs (gitignored, lives on the host)
 logs/    download_bills.log (gitignored, lives on the host)
 ```
+
+## Future enhancements
+
+- **Reduce the automated-browser fingerprint further.** A scheduled run
+  failed with "Login did not redirect away from /login" while a manual
+  login on the same account worked fine moments later - the leading
+  suspect is bot detection on the ISP's login flow scoring the automation
+  fingerprint (Selenium's default `navigator.webdriver = true` flag,
+  plus headless Chrome's other detectable quirks like WebGL renderer
+  strings and missing plugins). A stale spoofed User-Agent contributing
+  to that fingerprint has already been fixed (see `build_driver()`).
+  Remaining options, roughly in order of impact:
+  - Patch out `navigator.webdriver` (e.g. via a CDP
+    `Page.addScriptToEvaluateOnNewDocument` call before navigation).
+  - Run headed inside a virtual display (Xvfb/VNC, already supported by
+    the `selenium/standalone-chromium` base image) instead of
+    `--headless=new`, since headless mode is itself a detectable signal
+    on some sites.
