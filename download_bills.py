@@ -78,10 +78,11 @@ def build_driver():
     options.add_argument("--disable-dev-shm-usage")
     options.add_argument("--disable-gpu")
     options.add_argument("--window-size=1400,1200")
-    options.add_argument(
-        "--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36"
-    )
+    # No --user-agent override here on purpose: a hardcoded UA drifts out of
+    # sync with whatever Chromium version the base image actually bundles
+    # (it floats on :latest), and a UA that claims an older version than the
+    # real one is a textbook bot-detection signal on sites with WAF/bot
+    # management - let Chromium report its own real UA instead.
     return webdriver.Chrome(options=options)
 
 
@@ -107,6 +108,19 @@ def login(driver):
             "Login did not redirect away from /login - credentials may be wrong "
             "or the login page structure has changed."
         ) from exc
+
+
+def save_failure_artifacts(driver):
+    """Screenshot + page source at the moment of failure, so the next
+    unexpected error is diagnosable from the logs instead of a guess."""
+    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    try:
+        driver.save_screenshot(os.path.join(LOG_DIR, f"failure_{timestamp}.png"))
+        with open(os.path.join(LOG_DIR, f"failure_{timestamp}.html"), "w") as f:
+            f.write(driver.page_source)
+        log(f"Saved failure artifacts: failure_{timestamp}.png / .html")
+    except Exception as exc:
+        log(f"WARNING: could not save failure artifacts: {exc}")
 
 
 def parse_bill_date(text):
@@ -346,6 +360,8 @@ def main():
     except Exception as exc:
         error = exc
         log(f"ERROR: run failed: {exc}")
+        if driver is not None:
+            save_failure_artifacts(driver)
     finally:
         if driver is not None:
             driver.quit()
