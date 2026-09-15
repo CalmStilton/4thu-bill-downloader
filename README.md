@@ -146,6 +146,12 @@ data/    downloaded bill PDFs (gitignored, lives on the host)
 logs/    download_bills.log (gitignored, lives on the host)
 ```
 
+On any run failure (login or otherwise), a screenshot, page source, browser
+console log, and network trace are saved to `logs/failure_<timestamp>.*` and
+also pushed to `<RCLONE_PATH>/failure-logs/` on the configured rclone remote
+(when `RCLONE_REMOTE` is set), so a scheduled-run failure is diagnosable
+without needing host access to pull the files yourself.
+
 ## Future enhancements
 
 - **Reduce the automated-browser fingerprint further.** A scheduled run

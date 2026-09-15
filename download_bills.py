@@ -12,6 +12,7 @@ Designed to run as a one-shot container triggered by Ofelia (job-run), not
 as a long-lived service.
 """
 
+import json
 import os
 import re
 import sys
@@ -83,6 +84,7 @@ def build_driver():
     # (it floats on :latest), and a UA that claims an older version than the
     # real one is a textbook bot-detection signal on sites with WAF/bot
     # management - let Chromium report its own real UA instead.
+    options.set_capability("goog:loggingPrefs", {"browser": "ALL", "performance": "ALL"})
     return webdriver.Chrome(options=options)
 
 
@@ -90,15 +92,19 @@ def login(driver):
     driver.get(LOGIN_URL)
     wait = WebDriverWait(driver, 20)
 
+    # Explicit waits on every element we interact with, not just the first -
+    # the page's HTML can arrive before its JS has finished hydrating and
+    # attaching click handlers, and a click that lands in that window
+    # succeeds at the WebDriver level but silently does nothing.
     email_input = wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, "input[type='email'], input[type='text']")))
-    password_input = driver.find_element(By.CSS_SELECTOR, "input[type='password']")
+    password_input = wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, "input[type='password']")))
 
     email_input.clear()
     email_input.send_keys(ISP_USERNAME)
     password_input.clear()
     password_input.send_keys(ISP_PASSWORD)
 
-    submit_btn = driver.find_element(By.XPATH, "//button[contains(., 'Submit')]")
+    submit_btn = wait.until(EC.element_to_be_clickable((By.XPATH, "//button[contains(., 'Submit')]")))
     submit_btn.click()
 
     try:
@@ -111,16 +117,57 @@ def login(driver):
 
 
 def save_failure_artifacts(driver):
-    """Screenshot + page source at the moment of failure, so the next
-    unexpected error is diagnosable from the logs instead of a guess."""
+    """Screenshot, page source, browser console log, and network trace at
+    the moment of failure, so the next unexpected error is diagnosable from
+    the logs instead of a guess. Returns the list of files written."""
     timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    paths = []
     try:
-        driver.save_screenshot(os.path.join(LOG_DIR, f"failure_{timestamp}.png"))
-        with open(os.path.join(LOG_DIR, f"failure_{timestamp}.html"), "w") as f:
+        screenshot_path = os.path.join(LOG_DIR, f"failure_{timestamp}.png")
+        driver.save_screenshot(screenshot_path)
+        paths.append(screenshot_path)
+
+        html_path = os.path.join(LOG_DIR, f"failure_{timestamp}.html")
+        with open(html_path, "w") as f:
             f.write(driver.page_source)
-        log(f"Saved failure artifacts: failure_{timestamp}.png / .html")
+        paths.append(html_path)
+
+        console_path = os.path.join(LOG_DIR, f"failure_{timestamp}_console.log")
+        with open(console_path, "w") as f:
+            for entry in driver.get_log("browser"):
+                f.write(f"[{entry['level']}] {entry['message']}\n")
+        paths.append(console_path)
+
+        network_path = os.path.join(LOG_DIR, f"failure_{timestamp}_network.json")
+        with open(network_path, "w") as f:
+            json.dump(driver.get_log("performance"), f, indent=2)
+        paths.append(network_path)
+
+        log(f"Saved failure artifacts: {', '.join(os.path.basename(p) for p in paths)}")
     except Exception as exc:
         log(f"WARNING: could not save failure artifacts: {exc}")
+    return paths
+
+
+def upload_failure_artifacts_to_drive(paths):
+    if not paths:
+        return
+    if not RCLONE_REMOTE:
+        log("RCLONE_REMOTE not set, skipping failure-artifact upload")
+        return
+    dest = f"{RCLONE_REMOTE}:{RCLONE_PATH}/failure-logs"
+    failures = 0
+    for path in paths:
+        result = subprocess.run(
+            ["rclone", "copyto", path, f"{dest}/{os.path.basename(path)}"],
+            capture_output=True, text=True,
+        )
+        if result.returncode != 0:
+            failures += 1
+            log(f"WARNING: failed to upload {os.path.basename(path)} to Drive: {result.stderr.strip()}")
+    uploaded = len(paths) - failures
+    if uploaded:
+        log(f"Uploaded {uploaded}/{len(paths)} failure artifact(s) to Drive ({dest})")
 
 
 def parse_bill_date(text):
@@ -361,7 +408,8 @@ def main():
         error = exc
         log(f"ERROR: run failed: {exc}")
         if driver is not None:
-            save_failure_artifacts(driver)
+            artifact_paths = save_failure_artifacts(driver)
+            upload_failure_artifacts_to_drive(artifact_paths)
     finally:
         if driver is not None:
             driver.quit()
