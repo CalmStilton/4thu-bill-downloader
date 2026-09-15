@@ -308,7 +308,13 @@ def build_history_line(new_bills, error):
     date_str = datetime.now().strftime("%Y-%m-%d")
     if error:
         status = "Error"
-        detail = str(error).replace("|", "/")[:150]
+        message = str(error).replace("|", "/")[:150]
+        # Links to the pinned Drive root, not the failure-logs/ subfolder
+        # itself - rclone creates that subfolder on demand and we never
+        # learn its own Drive folder ID, so this is one click short of a
+        # direct deep link.
+        link = drive_folder_link()
+        detail = f"{message} — [failure-logs]({link})" if link else message
     elif new_bills:
         status = "New bill downloaded"
         names = ", ".join(f"{b['filename']}`" for b in new_bills)
