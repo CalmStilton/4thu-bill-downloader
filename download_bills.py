@@ -365,7 +365,11 @@ def update_bookstack_log(date_str, status, detail):
     page started with, and the raw HTML <table> BookStack rewrites it as
     once someone edits the page through the WYSIWYG editor (observed after
     a manual row deletion) - otherwise a UI edit silently breaks logging
-    from then on."""
+    from then on. BookStack's page API only populates the "markdown" field
+    for pages still using the Markdown editor; a WYSIWYG-edited page (like
+    this one, after that edit) returns it empty and the real content is in
+    "html" instead - fall back to that field, and write back through
+    whichever field we actually read from."""
     if not (BOOKSTACK_URL and BOOKSTACK_TOKEN_ID and BOOKSTACK_TOKEN_SECRET and BOOKSTACK_PAGE_ID):
         return
 
@@ -379,7 +383,12 @@ def update_bookstack_log(date_str, status, detail):
     try:
         resp = requests.get(f"{base}/api/pages/{BOOKSTACK_PAGE_ID}", headers=headers, timeout=15)
         resp.raise_for_status()
-        content = resp.json().get("markdown", "")
+        page = resp.json()
+        field = "markdown"
+        content = page.get("markdown") or ""
+        if not content:
+            field = "html"
+            content = page.get("html") or ""
 
         if "<table" in content and "<thead" in content:
             marker = "<tbody>"
@@ -410,7 +419,7 @@ def update_bookstack_log(date_str, status, detail):
         put_resp = requests.put(
             f"{base}/api/pages/{BOOKSTACK_PAGE_ID}",
             headers=headers,
-            json={"markdown": new_content},
+            json={field: new_content},
             timeout=15,
         )
         put_resp.raise_for_status()
