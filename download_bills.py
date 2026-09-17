@@ -12,6 +12,7 @@ Designed to run as a one-shot container triggered by Ofelia (job-run), not
 as a long-lived service.
 """
 
+import html
 import json
 import os
 import re
@@ -318,7 +319,7 @@ def drive_folder_link():
     return f"https://drive.google.com/drive/folders/{folder_id}"
 
 
-def build_history_line(new_bills, error):
+def build_history_fields(new_bills, error):
     date_str = datetime.now().strftime("%Y-%m-%d")
     if error:
         status = "Error"
@@ -331,21 +332,40 @@ def build_history_line(new_bills, error):
         detail = f"{message} — [failure-logs]({link})" if link else message
     elif new_bills:
         status = "New bill downloaded"
-        names = ", ".join(f"{b['filename']}`" for b in new_bills)
+        names = ", ".join(b["filename"] for b in new_bills)
         link = drive_folder_link()
         detail = f"[Drive folder]({link}) — {names}" if link else names
     else:
         status = "Checked, nothing new"
         detail = "-"
-    return f"| {date_str} | {status} | {detail} |"
+    return date_str, status, detail
 
 
-def update_bookstack_log(status_line):
+LINK_MD_RE = re.compile(r"\[([^\]]*)\]\(([^)]*)\)")
+
+
+def _history_row_to_html(date_str, status, detail):
+    """Convert a (date, status, detail) row to a <tr>, translating any
+    [text](url) markdown links in detail to <a> tags along the way."""
+    detail_html = LINK_MD_RE.sub(
+        lambda m: f'<a href="{m.group(2)}" target="_blank" rel="noopener">{m.group(1)}</a>',
+        html.escape(detail),
+    )
+    return f"<tr><td>{html.escape(date_str)}</td><td>{html.escape(status)}</td><td>{detail_html}</td></tr>"
+
+
+def update_bookstack_log(date_str, status, detail):
     """Prepend a row to the Run history table on the wiki page. Reads the
     current page, inserts the new row under the table header, and writes the
     whole page back - BookStack's API has no partial-content update, so this
     keeps everything else on the page untouched by round-tripping the full
-    markdown."""
+    content.
+
+    Handles two representations of that table: the Markdown pipe-table this
+    page started with, and the raw HTML <table> BookStack rewrites it as
+    once someone edits the page through the WYSIWYG editor (observed after
+    a manual row deletion) - otherwise a UI edit silently breaks logging
+    from then on."""
     if not (BOOKSTACK_URL and BOOKSTACK_TOKEN_ID and BOOKSTACK_TOKEN_SECRET and BOOKSTACK_PAGE_ID):
         return
 
@@ -361,20 +381,31 @@ def update_bookstack_log(status_line):
         resp.raise_for_status()
         content = resp.json().get("markdown", "")
 
-        lines = content.splitlines()
-        header_idx = next(
-            (i for i, line in enumerate(lines)
-             if line.strip().startswith("|") and "Date" in line and "Status" in line),
-            None,
-        )
-        if header_idx is None:
-            log("WARNING: BookStack update skipped - run history table header not found on page")
-            return
+        if "<table" in content and "<thead" in content:
+            marker = "<tbody>"
+            insert_at = content.find(marker)
+            if insert_at == -1 or "Date" not in content or "Status" not in content:
+                log("WARNING: BookStack update skipped - run history table not found on page")
+                return
+            insert_at += len(marker)
+            row = _history_row_to_html(date_str, status, detail)
+            new_content = content[:insert_at] + row + content[insert_at:]
+        else:
+            lines = content.splitlines()
+            header_idx = next(
+                (i for i, line in enumerate(lines)
+                 if line.strip().startswith("|") and "Date" in line and "Status" in line),
+                None,
+            )
+            if header_idx is None:
+                log("WARNING: BookStack update skipped - run history table header not found on page")
+                return
 
-        insert_idx = header_idx + 2  # past the header row and its "|---|---|---|" separator
-        new_lines = lines[:insert_idx] + [status_line]
-        rest = [l for l in lines[insert_idx:] if "no runs logged yet" not in l]
-        new_content = "\n".join(new_lines + rest)
+            insert_idx = header_idx + 2  # past the header row and its "|---|---|---|" separator
+            status_line = f"| {date_str} | {status} | {detail} |"
+            new_lines = lines[:insert_idx] + [status_line]
+            rest = [l for l in lines[insert_idx:] if "no runs logged yet" not in l]
+            new_content = "\n".join(new_lines + rest)
 
         put_resp = requests.put(
             f"{base}/api/pages/{BOOKSTACK_PAGE_ID}",
@@ -435,7 +466,7 @@ def main():
         if driver is not None:
             driver.quit()
 
-    update_bookstack_log(build_history_line(new_bills, error))
+    update_bookstack_log(*build_history_fields(new_bills, error))
 
     if error:
         if HA_NOTIFY_ON_ERROR:
