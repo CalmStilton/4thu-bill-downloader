@@ -107,13 +107,27 @@ def login(driver):
     submit_btn = wait.until(EC.element_to_be_clickable((By.XPATH, "//button[contains(., 'Submit')]")))
     submit_btn.click()
 
-    try:
-        wait.until(lambda d: "/login" not in d.current_url)
-    except Exception as exc:
+    # Deliberately NOT waiting on driver.current_url here anymore. Captured
+    # network logs from a real failure showed the login POST getting a
+    # prompt 302 (redirecting to /settings, confirming the credentials were
+    # accepted) every time, but the site's JS router (Inertia) only updates
+    # the browser's URL after a follow-up fetch of that redirect target
+    # finishes - and that specific follow-up request intermittently hung
+    # indefinitely, with no error, no timeout, nothing. Waiting on
+    # current_url made us depend on a page we don't even need (/settings)
+    # ever finishing. The POST itself resolved in ~1.7s in the captured
+    # trace, so give it a couple of seconds and verify success afterwards
+    # against the page we actually need instead (see verify_logged_in,
+    # called after navigating to BILLS_URL).
+    time.sleep(2)
+
+
+def verify_logged_in(driver):
+    if "/login" in driver.current_url:
         raise RuntimeError(
-            "Login did not redirect away from /login - credentials may be wrong "
-            "or the login page structure has changed."
-        ) from exc
+            "Redirected back to /login when loading the bills page - "
+            "credentials may be wrong or the login page structure has changed."
+        )
 
 
 def save_failure_artifacts(driver):
@@ -388,6 +402,7 @@ def main():
         driver = build_driver()
         login(driver)
         driver.get(BILLS_URL)
+        verify_logged_in(driver)
         invoices = collect_invoice_rows(driver)
         session = session_from_driver(driver)
 
