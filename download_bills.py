@@ -2,7 +2,7 @@
 """
 4thU Bill Downloader
 ---------------------
-Logs into my.4thutility.co.uk, walks the /bills table, downloads any invoice
+Logs into my.4thutility.co.uk, walks the /billing bills list, downloads any invoice
 PDF that hasn't already been saved locally, pushes new bills to Google Drive
 via rclone, and (optionally) fires a Home Assistant notification when a new
 bill is found. Always logs a line so a run's outcome is visible later, even
@@ -29,7 +29,7 @@ from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 
 LOGIN_URL = "https://my.4thutility.co.uk/login"
-BILLS_URL = "https://my.4thutility.co.uk/bills"
+BILLS_URL = "https://my.4thutility.co.uk/billing"
 
 DATA_DIR = os.environ.get("DATA_DIR", "/app/data")
 LOG_DIR = os.environ.get("LOG_DIR", "/app/logs")
@@ -62,6 +62,11 @@ BOOKSTACK_TOKEN_SECRET = os.environ.get("BOOKSTACK_TOKEN_SECRET", "").strip()
 BOOKSTACK_PAGE_ID = os.environ.get("BOOKSTACK_PAGE_ID", "").strip()
 
 ORDINAL_RE = re.compile(r"(\d+)(st|nd|rd|th)", re.IGNORECASE)
+MONTHS = {m: i for i, m in enumerate(
+    ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"], 1)}
+
+# Each bill on the billing page is a link in the bills list, not a table row.
+INVOICE_LINK_XPATH = "//li//a[starts-with(@href, '/billing/invoice/')]"
 
 
 def log(message):
@@ -105,7 +110,9 @@ def login(driver):
     password_input.clear()
     password_input.send_keys(ISP_PASSWORD)
 
-    submit_btn = wait.until(EC.element_to_be_clickable((By.XPATH, "//button[contains(., 'Submit')]")))
+    # Scoped to the form: the page also has a "Login" tab button, which would
+    # match on text alone and does nothing when clicked.
+    submit_btn = wait.until(EC.element_to_be_clickable((By.XPATH, "//form//button[@type='submit']")))
     submit_btn.click()
 
     # Deliberately NOT waiting on driver.current_url here anymore. Captured
@@ -186,39 +193,30 @@ def upload_failure_artifacts_to_drive(paths):
 
 
 def parse_bill_date(text):
-    """'11th August 2026' -> datetime(2026, 8, 11)"""
+    """'11 Aug 2026', '11 Sept 2026' or '11th August 2026' -> datetime(2026, 8, 11)
+
+    Matches the month on its first three letters so Chrome's en-GB "Sept"
+    parses the same as "Sep" or "September".
+    """
     cleaned = ORDINAL_RE.sub(r"\1", text).strip()
-    return datetime.strptime(cleaned, "%d %B %Y")
-
-
-def hook_window_open(driver):
-    driver.execute_script(
-        "window.__opens = []; "
-        "window.open = function(...args) { window.__opens.push(args); return null; };"
-    )
-
-
-def last_opened_url(driver):
-    opens = driver.execute_script("return window.__opens")
-    driver.execute_script("window.__opens = [];")
-    if not opens:
-        return None
-    return opens[-1][0]
+    try:
+        day, month, year = cleaned.split()
+        return datetime(int(year), MONTHS[month[:3].lower()], int(day))
+    except (ValueError, KeyError):
+        raise ValueError(f"unrecognised bill date '{text}'") from None
 
 
 def collect_invoice_rows(driver):
-    """Return list of (reference, bill_date, row_element) for Invoice rows."""
+    """Return list of (reference, bill_date, invoice_url) for the bills listed."""
     wait = WebDriverWait(driver, 20)
-    wait.until(EC.presence_of_element_located((By.XPATH, "//td[contains(text(), 'Invoice #')]")))
+    wait.until(EC.presence_of_element_located((By.XPATH, INVOICE_LINK_XPATH)))
 
-    rows = driver.find_elements(By.XPATH, "//tr[td[contains(text(), 'Invoice #')]]")
+    links = driver.find_elements(By.XPATH, INVOICE_LINK_XPATH)
     invoices = []
-    for row in rows:
-        cells = row.find_elements(By.TAG_NAME, "td")
-        if len(cells) < 4:
-            continue
-        date_text = cells[0].text.strip()
-        ref_text = cells[3].text.strip()  # Reference column, e.g. INV1402505
+    for link in links:
+        # Link layout: <p>reference</p> <span>date</span> <span>status</span> <p>amount</p>
+        ref_text = link.find_element(By.TAG_NAME, "p").text.strip()  # e.g. INV1402505
+        date_text = link.find_element(By.TAG_NAME, "span").text.strip()
         if not ref_text.startswith("INV"):
             continue
         try:
@@ -226,7 +224,12 @@ def collect_invoice_rows(driver):
         except ValueError:
             log(f"WARNING: could not parse date '{date_text}' for {ref_text}, skipping")
             continue
-        invoices.append((ref_text, bill_date, row))
+        invoices.append((ref_text, bill_date, link.get_attribute("href")))
+
+    log(f"Found {len(links)} bill link(s), {len(invoices)} usable")
+    if links and not invoices:
+        # Don't let a layout change look like "Checked, nothing new."
+        raise RuntimeError("Bill links found but none could be read - page layout may have changed")
     return invoices
 
 
@@ -238,24 +241,11 @@ def session_from_driver(driver):
     return session
 
 
-def download_invoice(driver, session, row, dest_path):
-    hook_window_open(driver)
-    driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", row)
-    driver.execute_script("arguments[0].click();", row)
-
-    url = None
-    for _ in range(10):
-        url = last_opened_url(driver)
-        if url:
-            break
-        time.sleep(0.3)
-
-    if not url:
-        raise RuntimeError("Clicking the invoice row did not produce a download URL")
-
+def download_invoice(session, url, dest_path):
     resp = session.get(url, timeout=30)
     resp.raise_for_status()
     content_type = resp.headers.get("content-type", "")
+    log(f"Invoice fetch {url} -> {resp.status_code} {content_type} (final URL {resp.url})")
     if "pdf" not in content_type.lower():
         raise RuntimeError(f"Expected a PDF but got content-type '{content_type}'")
 
@@ -446,13 +436,13 @@ def main():
         invoices = collect_invoice_rows(driver)
         session = session_from_driver(driver)
 
-        for reference, bill_date, row in invoices:
+        for reference, bill_date, invoice_url in invoices:
             filename = f"{bill_date.year:04d}-{bill_date.month:02d}-4thUBill.pdf"
             dest_path = os.path.join(DATA_DIR, filename)
             if os.path.exists(dest_path):
                 continue
             try:
-                download_invoice(driver, session, row, dest_path)
+                download_invoice(session, invoice_url, dest_path)
                 log(f"Downloaded new bill: {filename} ({reference})")
                 new_bills.append({"filename": filename, "reference": reference})
             except Exception as exc:
