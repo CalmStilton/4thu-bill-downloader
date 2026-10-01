@@ -3,6 +3,8 @@ services:
     image: ghcr.io/calmstilton/4thu-bill-downloader:latest
     container_name: 4thu-bill-downloader
     restart: "no"          # ephemeral: Ofelia's job-run starts it on schedule and it exits
+    mem_limit: 1024m
+    memswap_limit: 1024m
     environment:
       ISP_USERNAME: ${ISP_USERNAME}
       ISP_PASSWORD: ${ISP_PASSWORD}
